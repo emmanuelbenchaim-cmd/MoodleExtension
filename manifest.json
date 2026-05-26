@@ -14,7 +14,8 @@
   "action": {
     "default_popup": "popup.html"
   },
-  "host_permissions": [
-    "*://*/*" 
+  "host_permissions": [ 
+    "https://raw.githubusercontent.com/*"
   ]
+  
 }

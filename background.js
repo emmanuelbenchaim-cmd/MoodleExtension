@@ -156,4 +156,32 @@ async function runBackgroundSync() {
     } catch (error) {
         console.error("Moodle background sync failed:", error);
     }
+    // הקישור הישיר לקובץ המניפסט בגיטהאב שלך (Raw URL)
+const GITHUB_MANIFEST_URL = "https://raw.githubusercontent.com/emmanuelbenchaim-cmd/MoodleExtension/main/MoodleExtensionEBC/manifest.json";
+
+async function checkForUpdates() {
+    try {
+        // משיכת נתוני הגרסה מהענן
+        let response = await fetch(GITHUB_MANIFEST_URL, { cache: "no-store" });
+        let remoteManifest = await response.json();
+        
+        // שליפת הגרסה המותקנת כרגע בדפדפן
+        let localVersion = chrome.runtime.getManifest().version;
+
+        // השוואה: אם הגרסה בגיטהאב שונה (חדשה יותר), נקפיץ התרעה
+        if (remoteManifest.version !== localVersion) {
+            chrome.notifications.create({
+                type: "basic",
+                iconUrl: "icon.png", // ודא שיש אייקון בנתיב הזה
+                title: "עדכון חדש ל-Moodle Organizer Pro!",
+                message: `גרסה ${remoteManifest.version} זמינה עכשיו. היכנסו ל-GitHub כדי להוריד את הקבצים החדשים ולהתקין.`
+            });
+        }
+    } catch (error) {
+        console.log("שגיאה בבדיקת עדכונים:", error);
+    }
+}
+
+// הרצת הבדיקה בכל פעם שהדפדפן נפתח/התוסף מתעורר
+checkForUpdates();
 }
