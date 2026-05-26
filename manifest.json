@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Moodle Organizer by Emmanuel",
+  "version": "1.2",
+  "description": "מרכז את כל ההגשות הפתוחות במודל בסנכרון יומן אוטומטי, עם אפשרות למיון וסימון V. כולל התראות שולחן עבודה.",
+  "permissions": [
+    "storage",
+    "notifications",
+    "alarms"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "host_permissions": [
+    "*://*/*" 
+  ]
+}

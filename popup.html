@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; }
+
+    :root {
+      --bg-color: #f8fafc; --card-bg: #ffffff; --text-main: #0f172a; 
+      --text-muted: #64748b; --accent: #1e293b; --success: #10b981; 
+      --danger: #ef4444; --border: #e2e8f0; --blue: #3b82f6; 
+      --sidebar-width: 250px;
+    }
+    
+    body.dark-mode {
+      --bg-color: #0f172a; --card-bg: #1e293b; --text-main: #f8fafc;
+      --text-muted: #94a3b8; --accent: #f1f5f9; --border: #334155;
+    }
+    
+    html, body { width: 800px; height: 600px; min-width: 800px; min-height: 600px; margin: 0; padding: 0; overflow: hidden; }
+
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: var(--text-main); background-color: var(--bg-color); transition: background-color 0.3s, color 0.3s; }
+    
+    .app-layout { display: flex; width: 100%; height: 100%; }
+    
+    .sidebar { width: var(--sidebar-width); background: var(--card-bg); border-left: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; z-index: 10; height: 100%; transition: 0.3s; }
+    .sidebar-header { padding: 24px 20px 16px; border-bottom: 1px solid var(--border); }
+    .sidebar-header h2 { font-size: 20px; font-weight: 800; margin: 0; background: linear-gradient(135deg, var(--blue), #8b5cf6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    
+    .schedule-widget { margin: 12px; padding: 16px; border-radius: 12px; display: none; flex-direction: column; gap: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.02); transition: 0.3s; border: 1px solid transparent; }
+    .schedule-widget.active { display: flex; animation: fadeIn 0.4s; }
+    .schedule-widget.state-live { background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(16, 185, 129, 0.05)); border-color: rgba(16, 185, 129, 0.2); }
+    .schedule-widget.state-idle { background: var(--bg-color); border-color: var(--border); padding: 10px 16px; gap: 4px; }
+    .schedule-widget.state-idle .class-title { font-size: 13px; color: var(--text-muted); font-weight: 600; text-align: center; margin: 0; }
+    
+    .class-title { font-weight: 800; font-size: 15px; color: var(--text-main); line-height: 1.3; margin-bottom: 2px;}
+    .class-meta { font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between; align-items: center; margin-top: 2px;}
+    .class-loc { display: flex; align-items: center; gap: 4px; font-weight: 500; color: var(--text-main); background: rgba(120,120,120,0.1); padding: 2px 8px; border-radius: 6px;}
+    
+    .progress-bg { height: 8px; background: rgba(0,0,0,0.06); border-radius: 4px; overflow: hidden; margin-top: 6px; position: relative;}
+    body.dark-mode .progress-bg { background: rgba(255,255,255,0.1); }
+    .progress-bar { height: 100%; background: var(--success); transition: width 1s linear; border-radius: 4px; }
+    .percent-text { text-align: center; font-size: 11px; font-weight: bold; color: var(--success); margin-top: 2px;}
+    .next-class { font-size: 12px; color: var(--text-muted); border-top: 1px dashed var(--border); padding-top: 10px; margin-top: 6px; display: flex; justify-content: space-between; font-weight: 500;}
+
+    .course-list { list-style: none; padding: 12px; margin: 0; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 4px; }
+    .course-item { padding: 10px 12px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text-muted); transition: 0.2s; display: flex; justify-content: space-between; align-items: center; }
+    .course-item:hover { background: var(--border); color: var(--text-main); }
+    .course-item.active { background: var(--blue); color: white; box-shadow: 0 4px 6px rgba(59, 130, 246, 0.2); }
+    .course-name-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-left: 8px; }
+    .course-count { background: #e2e8f0; color: #0f172a !important; font-size: 11px; padding: 2px 8px; border-radius: 12px; font-weight: 700; flex-shrink: 0; }
+    
+    .main-content { flex: 1; padding: 16px 24px 20px; overflow-y: auto; overflow-x: hidden; display: block; height: 100%; position: relative; }
+    
+    .header-area { display: flex; align-items: center; justify-content: flex-end; margin-bottom: 24px; padding-bottom: 12px; border-bottom: 1px solid var(--border); transition: 0.3s;}
+    
+    .settings-trigger { background: var(--card-bg); border: 1px solid var(--border); font-size: 20px; cursor: pointer; border-radius: 8px; transition: 0.3s; color: var(--text-main); outline: none; display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; flex-shrink: 0; box-shadow: 0 2px 5px rgba(0,0,0,0.05);}
+    .settings-trigger:hover { background: var(--border); box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+    
+    .side-panel-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 100; opacity: 0; pointer-events: none; transition: 0.3s; backdrop-filter: blur(2px);}
+    .side-panel-overlay.active { opacity: 1; pointer-events: all; }
+    .side-panel { position: fixed; top: 0; left: 0; bottom: 0; width: 300px; background: var(--card-bg); border-right: 1px solid var(--border); box-shadow: 10px 0 30px rgba(0,0,0,0.15); z-index: 101; transform: translateX(-100%); transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); display: flex; flex-direction: column; }
+    .side-panel.active { transform: translateX(0); }
+    
+    .side-panel-header { padding: 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: flex-start; }
+    .side-panel-title { display: flex; flex-direction: column; gap: 4px; }
+    .side-panel-title h3 { margin: 0; font-size: 18px; color: var(--text-main); }
+    #sync-status-text { font-size: 11px; color: var(--text-muted); font-weight: normal; transition: color 0.3s; }
+    #sync-status-text.success { color: var(--success); font-weight: bold; }
+    #sync-status-text.syncing { color: var(--blue); animation: pulse 1.5s infinite; }
+    
+    .close-panel-btn { background: transparent; border: none; font-size: 18px; color: var(--text-muted); cursor: pointer; transition: 0.2s;}
+    .close-panel-btn:hover { color: var(--danger); transform: scale(1.1);}
+    
+    .side-panel-content { padding: 16px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 8px;}
+    
+    .panel-btn { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: transparent; border: 1px solid transparent; width: 100%; text-align: right; font-size: 14px; font-weight: 600; color: var(--text-main); cursor: pointer; border-radius: 8px; transition: 0.2s; outline: none; }
+    .panel-btn:hover { background: var(--border); border-color: var(--border); }
+    .panel-divider { height: 1px; background: var(--border); margin: 8px 0; }
+    
+    .menu-setting-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; color: var(--text-main); font-size: 14px; font-weight: 500;}
+    .menu-setting-row select { padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-color); color: var(--text-main); outline: none; font-family: inherit; font-size: 13px;}
+
+    .contact-btn { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 12px; background: rgba(59, 130, 246, 0.1); color: var(--blue); border-radius: 8px; font-weight: bold; font-size: 14px; text-decoration: none; transition: 0.2s; margin-top: auto;}
+    .contact-btn:hover { background: var(--blue); color: white; }
+
+    .switch { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--border); transition: .3s; border-radius: 20px; }
+    .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .3s; border-radius: 50%; box-shadow: 0 1px 2px rgba(0,0,0,0.2); }
+    input:checked + .slider { background-color: var(--blue); }
+    input:checked + .slider:before { transform: translateX(16px); }
+
+    #tasks-container { display: flex; flex-direction: column; gap: 12px; position: relative; padding-bottom: 24px; width: 100%; }
+    
+    .task { background: var(--card-bg); padding: 16px; border-radius: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.04); display: flex; flex-direction: column; gap: 12px; border: 1px solid var(--border); border-right: 5px solid var(--blue); transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); cursor: grab; animation: fadeInTask 0.3s ease-out; overflow: hidden; width: 100%; }
+    .task.done { opacity: 0.5; border-right-color: var(--success); filter: grayscale(50%); }
+    .task.done .task-title { text-decoration: line-through; color: var(--text-muted); }
+    
+    .task-header { display: flex; justify-content: space-between; align-items: flex-start; }
+    .task-left-section { display: flex; align-items: flex-start; gap: 10px; width: 100%; overflow: hidden; }
+    .drag-handle { color: var(--text-muted); font-size: 18px; cursor: grab; display: flex; align-items: center; padding-top: 2px; opacity: 0.5; transition: 0.2s;}
+    
+    .task-info { display: flex; flex-direction: column; gap: 8px; width: calc(100% - 20px); overflow: hidden; }
+    .task-title { font-weight: 700; font-size: 16px; color: var(--accent); text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: 0.2s; display: block; }
+    .meta-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .course-tag { font-size: 12px; font-weight: 600; padding: 5px 12px; border-radius: 20px; color: #0f172a !important; white-space: nowrap; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.05); }
+    .due-date { font-size: 13px; color: var(--text-main); font-weight: 600; display: flex; align-items: center; gap: 8px; background: var(--bg-color); padding: 5px 12px; border-radius: 20px; border: 1px solid var(--border); }
+    .urgency-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--success); box-shadow: 0 0 8px rgba(16, 185, 129, 0.6); flex-shrink: 0; }
+    .urgency-dot.warning { background: #f59e0b; box-shadow: 0 0 10px rgba(245, 158, 11, 0.8); }
+    .urgency-dot.danger { background: var(--danger); box-shadow: 0 0 12px rgba(239, 68, 68, 0.9); animation: pulseDanger 1.2s infinite; }
+    
+    .actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    .task-done-check { width: 22px; height: 22px; accent-color: var(--success); cursor: pointer; margin-left: 8px; transition: 0.2s;}
+    .icon-btn { background: transparent; color: var(--text-muted); padding: 6px; font-size: 15px; border-radius: 8px; box-shadow: none; border: none; cursor: pointer;}
+    .icon-btn:hover { background: var(--bg-color); color: var(--accent); }
+    
+    .subtasks-container { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; padding-top: 12px; border-top: 1px dashed var(--border); }
+    .subtask-item { display: flex; align-items: center; gap: 8px; background: var(--bg-color); padding: 6px 10px; border-radius: 6px; border: 1px solid transparent; transition: 0.2s;}
+    .subtask-item.done input[type="text"] { text-decoration: line-through; color: var(--text-muted); }
+    .subtask-check { width: 16px; height: 16px; accent-color: var(--blue); cursor: pointer; }
+    .subtask-input { flex: 1; border: none; background: transparent; font-size: 13px; font-family: inherit; color: var(--text-main); outline: none; padding: 2px;}
+    .btn-add-subtask { font-size: 12px; color: var(--blue); background: transparent; padding: 4px 8px; border: 1px dashed var(--border); border-radius: 6px; width: fit-content; margin-top: 4px; cursor: pointer;}
+    .btn-delete-subtask { color: var(--text-muted); background: transparent; border: none; padding: 2px; cursor: pointer; font-size: 12px;}
+
+    .empty-state { text-align: center; color: var(--text-muted); padding: 50px 0; font-size: 16px; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 12px; }
+    
+    .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 1000; justify-content: center; align-items: center; backdrop-filter: blur(4px); }
+    .modal-overlay.active { display: flex; animation: fadeIn 0.2s; }
+    .modal-content { background: var(--card-bg); border: 1px solid var(--border); border-radius: 16px; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.3); width: 650px; max-width: 95%;}
+    .modal-header { padding: 20px 24px; background: var(--bg-color); border-bottom: 1px solid var(--border); display:flex; justify-content:space-between; align-items:center;}
+    .modal-footer { padding: 16px 24px; background: var(--bg-color); border-top: 1px solid var(--border); display:flex; justify-content:flex-end; gap:10px;}
+    
+    input[type="text"], input[type="datetime-local"], select, textarea { background: var(--bg-color); color: var(--text-main); border: 1px solid var(--border); font-family: inherit; }
+    button.secondary { background: var(--card-bg); color: var(--text-main); border: 1px solid var(--border); padding: 8px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: 0.2s;}
+    button.secondary:hover { background: var(--bg-color); }
+    button.primary { background: var(--blue); color: white; border: none; padding: 8px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: 0.2s; box-shadow: 0 2px 4px rgba(59,130,246,0.3);}
+    button.primary:hover { background: #2563eb; transform: translateY(-1px); box-shadow: 0 4px 6px rgba(59,130,246,0.4);}
+    button.danger-btn { background: transparent; color: var(--danger); border: 1px solid var(--danger); padding: 6px 12px; border-radius: 6px; cursor:pointer;}
+    button.danger-btn:hover { background: var(--danger); color: white; }
+
+    .schedule-edit-row { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; background: var(--card-bg); }
+    .schedule-edit-row-top, .schedule-edit-row-bottom { display: flex; gap: 10px; align-items: center; width: 100%; }
+    .schedule-edit-row input, .schedule-edit-row select { padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border); font-size: 13px; }
+
+    .update-item { display: flex; flex-direction: column; gap: 4px; padding: 12px; border-radius: 8px; background: var(--bg-color); border: 1px solid var(--border); margin-bottom: 8px; }
+    .update-time { font-size: 11px; color: var(--text-muted); }
+    .update-text { font-size: 14px; font-weight: 500; color: var(--text-main); }
+
+    @keyframes fadeIn { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
+    @keyframes pulseDanger { 0% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(1.3); } 100% { opacity: 1; transform: scale(1); } }
+    .confetti { position: absolute; width: 8px; height: 8px; z-index: 1000; pointer-events: none; border-radius: 2px; animation: pop 0.8s ease-out forwards; }
+    @keyframes pop { 0% { transform: translate(0, 0) scale(1) rotate(0deg); opacity: 1; } 100% { transform: translate(var(--tx), var(--ty)) scale(0) rotate(720deg); opacity: 0; } }
+
+    .timetable-grid { display: flex; gap: 8px; height: 100%; min-width: 700px; padding-bottom: 20px; min-height: 600px;}
+    .timetable-day { flex: 1; display: flex; flex-direction: column; background: var(--bg-color); border-radius: 8px; border: 1px solid var(--border); overflow: hidden; }
+    .timetable-day-header { text-align: center; font-weight: 700; padding: 10px 4px; background: var(--card-bg); font-size: 15px; border-bottom: 1px solid var(--border); z-index: 2; color: var(--accent); }
+    .timetable-day-body { position: relative; flex: 1; min-height: 400px; background-image: repeating-linear-gradient(transparent, transparent 49px, rgba(0,0,0,0.04) 50px); background-size: 100% 50px; }
+    body.dark-mode .timetable-day-body { background-image: repeating-linear-gradient(transparent, transparent 49px, rgba(255,255,255,0.04) 50px); }
+    .timetable-class-block { position: absolute; left: 4px; right: 4px; background: linear-gradient(135deg, var(--blue), #8b5cf6); color: white; padding: 6px; border-radius: 6px; font-size: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); display: flex; flex-direction: column; gap: 2px; overflow: hidden; border: 1px solid rgba(255,255,255,0.2); transition: 0.2s; z-index: 5;}
+    .timetable-class-block:hover { transform: translateY(-2px) scale(1.02); z-index: 10; box-shadow: 0 8px 12px rgba(0,0,0,0.2); }
+    .timetable-class-title { font-weight: 800; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 1px 2px rgba(0,0,0,0.2); }
+    .timetable-class-time { opacity: 0.9; font-size: 11px; font-weight: 500;}
+  </style>
+</head>
+<body>
+  
+  <div class="app-layout">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h2>הקורסים שלי</h2>
+      </div>
+      
+      <div id="live-schedule-widget" class="schedule-widget state-idle">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+          <div class="class-title" id="live-class-title" style="margin-bottom: 0;">אין שיעור כרגע</div>
+          <button id="view-weekly-btn" title="הצג מערכת שבועית" style="background: none; border: none; cursor: pointer; font-size: 18px; padding: 0; transition: 0.2s;">📅</button>
+        </div>
+        <div class="class-meta" id="live-class-meta" style="display:none;">
+          <span id="live-class-time">--:--</span>
+          <span class="class-loc" id="live-class-loc">📍 --</span>
+        </div>
+        <div class="progress-bg" id="progress-container" style="display:none;">
+          <div class="progress-bar" id="live-class-progress" style="width: 0%;"></div>
+        </div>
+        <div class="percent-text" id="live-class-percent" style="display:none;">0%</div>
+        <div class="next-class" id="next-class-info" style="display:none;">
+          <span>--</span>
+          <span>--</span>
+        </div>
+      </div>
+
+      <ul id="course-list" class="course-list"></ul>
+    </aside>
+
+    <main class="main-content">
+      <div class="header-area">
+        <button id="settings-trigger-btn" class="settings-trigger" title="תפריט כלים">☰</button>
+      </div>
+      <div id="tasks-container"></div>
+    </main>
+  </div>
+
+  <div id="side-panel-overlay" class="side-panel-overlay"></div>
+  <div id="side-panel" class="side-panel">
+    <div class="side-panel-header">
+      <div class="side-panel-title">
+        <h3>תפריט כלים</h3>
+        <div id="sync-status-text">עדכון אחרון: לא ידוע</div>
+      </div>
+      <button id="close-panel-btn" class="close-panel-btn">✕</button>
+    </div>
+    <div class="side-panel-content">
+      <button id="menu-refresh-btn" class="panel-btn">🔄 רענון נתונים ממודל</button>
+      <button id="updates-history-btn" class="panel-btn">🛎️ היסטוריית עדכונים</button>
+      <button id="notifications-settings-btn" class="panel-btn">🔔 הגדרות התראות</button>
+      <button id="add-new-btn" class="panel-btn">✨ יצירת משימה ידנית</button>
+      <button id="import-ics-btn" class="panel-btn">📅 סנכרון יומן מודל</button>
+      <button id="schedule-mgmt-btn" class="panel-btn">🏫 מערכת שעות (אקסל/עריכה)</button>
+      <button id="settings-btn" class="panel-btn">🏷️ שמות קורסים לתצוגה</button>
+      
+      <div class="panel-divider"></div>
+      
+      <div class="menu-setting-row">
+        <span>הצג מערכת שעות</span>
+        <label class="switch"><input type="checkbox" id="show-schedule-toggle" checked><span class="slider"></span></label>
+      </div>
+      <div class="menu-setting-row">
+        <span>עיצוב כהה 🌙</span>
+        <label class="switch"><input type="checkbox" id="dark-mode-toggle"><span class="slider"></span></label>
+      </div>
+      <div class="menu-setting-row">
+        <span>הצג משימות שבוצעו</span>
+        <label class="switch"><input type="checkbox" id="show-completed-check" checked><span class="slider"></span></label>
+      </div>
+      <div class="menu-setting-row">
+        <span>סידור רשימה</span>
+        <select id="sort-select">
+          <option value="custom">ידני (גרירה)</option>
+          <option value="date">לפי תאריך</option>
+          <option value="course">לפי קורס</option>
+        </select>
+      </div>
+
+      <a href="mailto:emmanuelbenchaim@gmail.com?subject=פידבק על תוסף Moodle Organizer" class="contact-btn">✉️ צור קשר / פידבק</a>
+    </div>
+  </div>
+
+  <div id="notifications-modal" class="modal-overlay">
+    <div class="modal-content" style="width: 500px;">
+      <div class="modal-header">
+        <h3 style="margin:0; color:var(--text-main);">🔔 התראות שולחן עבודה</h3>
+        <button class="close-panel-btn" id="close-notif-modal">✕</button>
+      </div>
+      <div style="padding: 16px 24px; overflow-y: auto; max-height: 450px; display:flex; flex-direction:column; gap:16px;">
+        <div class="menu-setting-row" style="background: var(--bg-color); padding: 12px; border-radius: 8px; border: 1px solid var(--border);">
+          <span style="font-weight: bold;">הפעל התראות שולחן עבודה (פועל ברקע)</span>
+          <label class="switch"><input type="checkbox" id="notif-global-toggle"><span class="slider"></span></label>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <div class="menu-setting-row">
+            <span>התראה על מטלה חדשה ✨</span>
+            <label class="switch"><input type="checkbox" id="notif-new-toggle"><span class="slider"></span></label>
+          </div>
+          <div class="menu-setting-row">
+            <span>התראה על שינוי/דחייה בתאריך 🔄</span>
+            <label class="switch"><input type="checkbox" id="notif-update-toggle"><span class="slider"></span></label>
+          </div>
+        </div>
+        <div class="panel-divider"></div>
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <span style="font-weight: bold; font-size: 14px;">בחר קורסים להתראות:</span>
+            <div style="display: flex; gap: 8px;">
+              <button class="secondary" id="notif-select-all" style="padding: 4px 8px; font-size: 12px;">בחר הכל</button>
+              <button class="secondary" id="notif-deselect-all" style="padding: 4px 8px; font-size: 12px;">בטל הכל</button>
+            </div>
+          </div>
+          <div id="notif-courses-list" style="display: flex; flex-direction: column; gap: 10px; background: var(--bg-color); padding: 12px; border-radius: 8px; border: 1px solid var(--border);">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="primary" id="save-notif-btn">שמור שינויים</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="task-form-modal" class="modal-overlay">
+    <div class="modal-content" style="width: 450px;">
+      <div class="modal-header"><h3 style="margin:0; color:var(--text-main);" id="form-title">הוספת מטלה ידנית</h3></div>
+      <div style="padding: 16px 24px; display: flex; flex-direction: column; gap: 12px;">
+        <input type="text" id="task-title-input" placeholder="שם המטלה (חובה)" style="width:100%; padding:10px; border-radius:8px;">
+        <input type="text" id="task-course-input" placeholder="שם הקורס" style="width:100%; padding:10px; border-radius:8px;">
+        <input type="datetime-local" id="task-date-input" style="width:100%; padding:10px; border-radius:8px;">
+      </div>
+      <div class="modal-footer">
+        <button class="secondary" id="cancel-form-btn">ביטול</button>
+        <button class="primary" id="save-form-btn">שמור</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="schedule-modal" class="modal-overlay">
+    <div class="modal-content" style="width: 650px;">
+      <div class="modal-header">
+        <h3 style="margin:0; color:var(--text-main);">🏫 ניהול מערכת שעות</h3>
+        <button class="close-panel-btn" id="close-schedule-modal">✕</button>
+      </div>
+      <div style="padding: 16px 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px;">
+        <div style="background: var(--bg-color); padding: 16px; border-radius: 12px; border: 1px dashed var(--blue);">
+          <h4 style="margin: 0 0 8px 0; color: var(--blue);">הדבקה מהירה מהאקסל</h4>
+          <p style="font-size: 13px; color: var(--text-muted); margin: 0 0 12px 0;">סמן את כל הטבלה באקסל (כולל כותרות), עשה העתק, והדבק כאן:</p>
+          <textarea id="excel-paste-area" placeholder="הדבק את הטבלה כאן (Ctrl+V)..." style="width: 100%; height: 80px; padding: 10px; border-radius: 8px; resize: none;"></textarea>
+          <div style="display: flex; justify-content: flex-end; margin-top: 8px;">
+            <button class="primary" id="parse-excel-btn">קרא ובנה מערכת 🚀</button>
+          </div>
+        </div>
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h4 style="margin: 0; color: var(--text-main);">השיעורים שלי</h4>
+            <button class="secondary" id="add-manual-class-btn" style="padding: 4px 10px; font-size: 12px;">+ שיעור חדש</button>
+          </div>
+          <div id="schedule-edit-list" style="display: flex; flex-direction: column; gap: 8px;"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="primary" id="save-schedule-btn">שמור מערכת שעות</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="settings-modal" class="modal-overlay">
+    <div class="modal-content" style="width: 500px;">
+      <div class="modal-header"><h3 style="margin:0; color:var(--text-main);">⚙️ שינוי שמות קורסים</h3></div>
+      <div style="padding: 16px 24px; color: var(--text-muted); font-size: 13px; border-bottom: 1px solid var(--border);">הכנס כינוי קצר ונוח לכל קורס. זה יעדכן את השמות בתצוגה בלבד.</div>
+      <div id="settings-aliases-list" style="padding: 0 24px 24px; overflow-y: auto; max-height: 400px; display:flex; flex-direction:column; gap:12px;"></div>
+      <div class="modal-footer"><button class="secondary" id="cancel-settings-btn">ביטול</button><button class="primary" id="save-settings-btn">שמור שינויים</button></div>
+    </div>
+  </div>
+
+  <div id="updates-modal" class="modal-overlay">
+    <div class="modal-content" style="width: 500px;">
+      <div class="modal-header">
+        <h3 style="margin:0; color:var(--text-main);">🛎️ היסטוריית עדכונים</h3>
+        <button class="close-panel-btn" id="close-updates-modal">✕</button>
+      </div>
+      <div id="updates-list-container" style="padding: 16px 24px 24px; overflow-y: auto; max-height: 400px; display:flex; flex-direction:column;">
+        </div>
+    </div>
+  </div>
+
+  <div id="ics-modal" class="modal-overlay">
+    <div class="modal-content" style="width: 500px;">
+      <div class="modal-header"><h3 style="margin:0; color:var(--text-main);">סנכרון יומן מודל</h3></div>
+      <div style="padding: 16px 24px;">
+        <input type="text" id="ics-url-input" placeholder="https://moodle.../calendar/export_execute.php?..." style="width:100%; padding:10px; border-radius:8px; outline:none; margin-top: 10px;">
+        <div id="ics-status" style="margin-top: 10px; font-size: 13px; color: var(--blue); font-weight: 500;"></div>
+      </div>
+      <div class="modal-footer"><button class="secondary" id="cancel-ics-btn">סגור</button><button class="primary" id="approve-ics-btn">שמור וסנכרן</button></div>
+    </div>
+  </div>
+
+  <div id="weekly-schedule-modal" class="modal-overlay">
+    <div class="modal-content" style="width: 850px; max-width: 95%; height: 600px;">
+      <div class="modal-header">
+        <h3 style="margin:0; color:var(--text-main);">📅 מערכת שעות שבועית</h3>
+        <button class="close-panel-btn" id="close-weekly-schedule-modal">✕</button>
+      </div>
+      <div style="padding: 16px; overflow: auto; height: 100%; display: flex; flex-direction: column;">
+        <div id="weekly-timetable-container" class="timetable-grid"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
