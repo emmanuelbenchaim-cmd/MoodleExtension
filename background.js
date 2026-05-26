@@ -1,12 +1,21 @@
-// שעון שמעיר את התוסף פעם בשעה כדי לסנכרן
 chrome.alarms.create("moodleSyncAlarm", { periodInMinutes: 60 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name === "moodleSyncAlarm") runBackgroundSync();
+    if (alarm.name === "moodleSyncAlarm") {
+        runBackgroundSync();
+    } else if (alarm.name === "testNotifAlarm") {
+        fireNotification("[מערכת בדיקה]", "ההגשה 'התראת ניסיון' נדחתה מתאריך אתמול לתאריך עכשיו");
+    }
 });
 
 chrome.runtime.onStartup.addListener(runBackgroundSync);
 chrome.runtime.onInstalled.addListener(runBackgroundSync);
+
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === "scheduleTestNotif") {
+        chrome.alarms.create("testNotifAlarm", { delayInMinutes: request.minutes });
+    }
+});
 
 function parseICSData(data) {
     const lines = data.split(/\r?\n/);
@@ -106,10 +115,19 @@ async function runBackgroundSync() {
 
             if (existingTaskIndex !== -1) {
                 const existingTask = allTasks[existingTaskIndex];
+                const oldDate = existingTask.dateStr;
                 let taskChanged = false;
 
-                if (existingTask.dateStr !== dateStr || existingTask.title !== cleanTitle) {
+                if (existingTask.dateStr !== dateStr) {
                     taskChanged = true;
+                    newLogs.push({ type: 'update', text: `[${displayCourseName}] המטלה "${cleanTitle}" נדחתה ל-${dateStr}` });
+
+                    if (notifSettings.onUpdate && courseAllowed) {
+                        fireNotification(`[${displayCourseName}]`, `ההגשה "${cleanTitle}" נדחתה מתאריך ${oldDate} לתאריך ${dateStr}`);
+                    }
+                } else if (existingTask.title !== cleanTitle) {
+                    taskChanged = true;
+                    newLogs.push({ type: 'update', text: `[${displayCourseName}] המטלה "${cleanTitle}" עודכנה` });
                 }
 
                 if (taskChanged) {
@@ -118,13 +136,6 @@ async function runBackgroundSync() {
                     existingTask.course = course; 
                     existingTask.url = taskUrl || existingTask.url;
                     isChanged = true;
-                    
-                    const doneNotice = existingTask.isDone ? " (✅ כבוצעה)" : "";
-                    newLogs.push({ type: 'update', text: `[${displayCourseName}] המטלה "${cleanTitle}" עודכנה ל-${dateStr}${doneNotice}` });
-
-                    if (notifSettings.onUpdate && courseAllowed) {
-                        fireNotification('Moodle Organizer - עדכון מטלה 🔄', `[${displayCourseName}] ${cleanTitle}\nעודכן ל-${dateStr}`);
-                    }
                 }
             } else {
                 allTasks.push({ id: safeId, title: cleanTitle, course: course, dateStr: dateStr, url: taskUrl, isDone: false, subTasks: [] });
@@ -132,7 +143,7 @@ async function runBackgroundSync() {
                 newLogs.push({ type: 'new', text: `[${displayCourseName}] התווספה הגשה חדשה: ${cleanTitle}` });
 
                 if (notifSettings.onNew && courseAllowed) {
-                    fireNotification('Moodle Organizer - מטלה חדשה! ✨', `[${displayCourseName}] ${cleanTitle}\nלמתי? ${dateStr}`);
+                    fireNotification(`[${displayCourseName}]`, `נוספה הגשה חדשה בקורס ${displayCourseName}\nשם ההגשה: ${cleanTitle}`);
                 }
             }
         });
@@ -156,32 +167,4 @@ async function runBackgroundSync() {
     } catch (error) {
         console.error("Moodle background sync failed:", error);
     }
-    // הקישור הישיר לקובץ המניפסט בגיטהאב שלך (Raw URL)
-const GITHUB_MANIFEST_URL = "https://raw.githubusercontent.com/emmanuelbenchaim-cmd/MoodleExtension/main/MoodleExtensionEBC/manifest.json";
-
-async function checkForUpdates() {
-    try {
-        // משיכת נתוני הגרסה מהענן
-        let response = await fetch(GITHUB_MANIFEST_URL, { cache: "no-store" });
-        let remoteManifest = await response.json();
-        
-        // שליפת הגרסה המותקנת כרגע בדפדפן
-        let localVersion = chrome.runtime.getManifest().version;
-
-        // השוואה: אם הגרסה בגיטהאב שונה (חדשה יותר), נקפיץ התרעה
-        if (remoteManifest.version !== localVersion) {
-            chrome.notifications.create({
-                type: "basic",
-                iconUrl: "icon.png", // ודא שיש אייקון בנתיב הזה
-                title: "עדכון חדש ל-Moodle Organizer Pro!",
-                message: `גרסה ${remoteManifest.version} זמינה עכשיו. היכנסו ל-GitHub כדי להוריד את הקבצים החדשים ולהתקין.`
-            });
-        }
-    } catch (error) {
-        console.log("שגיאה בבדיקת עדכונים:", error);
-    }
-}
-
-// הרצת הבדיקה בכל פעם שהדפדפן נפתח/התוסף מתעורר
-checkForUpdates();
 }

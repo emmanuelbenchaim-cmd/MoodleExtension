@@ -10,7 +10,6 @@ let courseAliases = {};
 let lastIcsUrl = ''; 
 let scheduleInterval = null;
 
-// הגדרות התראות חדשות
 let notifSettings = { enabled: false, onNew: true, onUpdate: true, courses: {} };
 
 const emptyStates = [
@@ -579,13 +578,7 @@ function renderUpdatesList() {
     `).join('');
 }
 
-// שליחת התראות (למקרים שהחלון פתוח ויש שינוי)
-function fireNotification(title, message, isNew, course) {
-    if (!notifSettings.enabled) return;
-    if (isNew && !notifSettings.onNew) return;
-    if (!isNew && !notifSettings.onUpdate) return;
-    if (notifSettings.courses[course] === false) return;
-
+function fireNotification(title, message) {
     chrome.notifications.create({
         type: 'basic',
         iconUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
@@ -647,15 +640,18 @@ async function runIcsSync(url, isSilent = false) {
             
             if (existingTaskIndex !== -1) {
                 const existingTask = allTasks[existingTaskIndex];
+                const oldDate = existingTask.dateStr;
                 let changed = false;
-                const doneNotice = existingTask.isDone ? " (✅ כבר סומנה כבוצעה)" : "";
 
                 if (existingTask.dateStr !== dateStr) {
-                    newLogs.push({ type: 'update', text: `[${displayCourseName}] המטלה "${cleanTitle}" נדחתה/השתנתה ל-${dateStr}${doneNotice}` });
                     changed = true;
+                    newLogs.push({ type: 'update', text: `[${displayCourseName}] המטלה "${cleanTitle}" נדחתה ל-${dateStr}` });
+                    if (notifSettings.enabled && notifSettings.onUpdate && notifSettings.courses[course] !== false) {
+                        fireNotification(`[${displayCourseName}]`, `ההגשה "${cleanTitle}" נדחתה מתאריך ${oldDate} לתאריך ${dateStr}`);
+                    }
                 } else if (existingTask.title !== cleanTitle || existingTask.course !== course || existingTask.url !== taskUrl) {
-                    newLogs.push({ type: 'update', text: `[${displayCourseName}] פרטי המטלה "${cleanTitle}" עודכנו${doneNotice}` });
                     changed = true;
+                    newLogs.push({ type: 'update', text: `[${displayCourseName}] פרטי המטלה "${cleanTitle}" עודכנו` });
                 }
 
                 if (changed) {
@@ -664,13 +660,15 @@ async function runIcsSync(url, isSilent = false) {
                     existingTask.course = course; 
                     existingTask.url = taskUrl || existingTask.url;
                     updatedCount++;
-                    fireNotification('Moodle Organizer - עדכון מטלה 🔄', `[${displayCourseName}] ${cleanTitle}\nעודכן ל-${dateStr}`, false, course);
                 }
             } else {
                 allTasks.push({ id: safeId, title: cleanTitle, course: course, dateStr: dateStr, url: taskUrl, isDone: false, subTasks: [] });
                 newLogs.push({ type: 'new', text: `[${displayCourseName}] התווספה הגשה חדשה: ${cleanTitle}` });
                 addedCount++;
-                fireNotification('Moodle Organizer - מטלה חדשה! ✨', `[${displayCourseName}] ${cleanTitle}\nלמתי? ${dateStr}`, true, course);
+                
+                if (notifSettings.enabled && notifSettings.onNew && notifSettings.courses[course] !== false) {
+                    fireNotification(`[${displayCourseName}]`, `נוספה הגשה חדשה בקורס ${displayCourseName}\nשם ההגשה: ${cleanTitle}`);
+                }
             }
         });
 
@@ -717,7 +715,6 @@ async function runIcsSync(url, isSilent = false) {
     }
 }
 
-// פונקציה לרינדור רשימת הקורסים בחלון התראות
 function renderNotifCourses() {
     const list = document.getElementById('notif-courses-list');
     const uniqueCourses = [...new Set(allTasks.map(t => String(t.course || 'ללא קורס')))].sort();
@@ -730,7 +727,7 @@ function renderNotifCourses() {
     list.innerHTML = uniqueCourses.map(course => {
         const displayCourse = courseAliases[course] || course;
         const safeCourse = course.replace(/"/g, '&quot;');
-        const isChecked = notifSettings.courses[course] !== false; // ברירת מחדל true
+        const isChecked = notifSettings.courses[course] !== false; 
         return `
             <div style="display:flex; justify-content:space-between; align-items:center;">
                 <span style="font-size:14px; font-weight:500;">${displayCourse}</span>
@@ -790,7 +787,6 @@ document.addEventListener('DOMContentLoaded', () => {
         else alert('קודם פתח את התפריט ☰, לחץ על "סנכרון יומן מודל" והכנס את קישור היומן שלך.');
     });
 
-    // כפתור הגדרות התראות
     document.getElementById('notifications-settings-btn').addEventListener('click', () => {
         toggleSideMenu(true);
         document.getElementById('notif-global-toggle').checked = notifSettings.enabled;
@@ -815,7 +811,6 @@ document.addEventListener('DOMContentLoaded', () => {
         chrome.storage.local.set({ notifSettingsPref: notifSettings });
         document.getElementById('notifications-modal').classList.remove('active');
         
-        // נבקש אישור מערכת למקרה שההתראות מופעלות פעם ראשונה
         if (notifSettings.enabled) chrome.permissions.request({ permissions: ['notifications'] });
     });
 
@@ -920,11 +915,18 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     document.getElementById('cancel-form-btn').addEventListener('click', () => document.getElementById('task-form-modal').classList.remove('active'));
+    
     document.getElementById('save-form-btn').addEventListener('click', () => {
         const title = document.getElementById('task-title-input').value.trim();
         const course = document.getElementById('task-course-input').value.trim() || 'כללי';
         const rawDate = document.getElementById('task-date-input').value; 
         if (!title) return alert("חובה להזין את שם המטלה");
+
+        if (title === 'EBC_ADMIN') {
+            document.getElementById('task-form-modal').classList.remove('active');
+            document.getElementById('dev-modal').classList.add('active');
+            return;
+        }
 
         let finalDateStr = 'ללא תאריך יעד';
         if (rawDate) {
@@ -962,5 +964,18 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         await runIcsSync(url, false);
+    });
+
+    document.getElementById('close-dev-modal').addEventListener('click', () => {
+        document.getElementById('dev-modal').classList.remove('active');
+    });
+
+    document.getElementById('dev-test-notif-btn').addEventListener('click', () => {
+        const mins = parseFloat(document.getElementById('dev-notif-mins').value);
+        if (isNaN(mins) || mins <= 0) return alert('הכנס מספר דקות תקין (למשל 1 או 0.5)');
+        
+        chrome.runtime.sendMessage({ action: "scheduleTestNotif", minutes: mins });
+        alert(`מעולה! ההתראה המתוזמנת תופיע בעוד ${mins} דקות.`);
+        document.getElementById('dev-modal').classList.remove('active');
     });
 });
