@@ -53,7 +53,7 @@ function fireNotification(title, message) {
 }
 
 async function runBackgroundSync() {
-    const result = await chrome.storage.local.get(['lastIcsUrlPref', 'savedMoodleTasks', 'notifSettingsPref', 'courseAliasesPref', 'recentUpdatesPref']);
+    const result = await chrome.storage.local.get(['lastIcsUrlPref', 'savedMoodleTasks', 'notifSettingsPref', 'courseAliasesPref', 'recentUpdatesPref', 'archivedCoursesPref']);
     
     if (!result.lastIcsUrlPref || !result.notifSettingsPref || !result.notifSettingsPref.enabled) return;
 
@@ -62,6 +62,7 @@ async function runBackgroundSync() {
     const notifSettings = result.notifSettingsPref;
     const courseAliases = result.courseAliasesPref || {};
     let recentUpdates = result.recentUpdatesPref || [];
+    const archivedCourses = result.archivedCoursesPref || [];
 
     try {
         const response = await fetch(url);
@@ -91,6 +92,7 @@ async function runBackgroundSync() {
                 title = parts.slice(1).join(':').trim(); 
             }
             if (!course) course = 'ללא קורס';
+            if (archivedCourses.includes(course)) return; // קורס שהסתיים - בלי הגשות ובלי התראות
 
             let dateStr = 'ללא תאריך יעד';
             if (ev.DTEND || ev.DTSTART) {

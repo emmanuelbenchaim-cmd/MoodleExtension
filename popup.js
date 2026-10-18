@@ -124,6 +124,9 @@ function updateLiveSchedule() {
 
     if (liveClass) {
         widget.classList.add('state-live');
+        widget.dataset.classId = liveClass.id;
+        widget.style.cursor = 'pointer';
+        widget.title = 'לחץ לפרטי השיעור';
         widget.classList.remove('state-idle');
         document.getElementById('live-class-title').innerText = `${liveClass.course} (${liveClass.type})`;
         document.getElementById('live-class-time').innerText = `${liveClass.start} - ${liveClass.end}`;
@@ -142,6 +145,9 @@ function updateLiveSchedule() {
         document.getElementById('live-class-percent').style.display = 'block';
     } else {
         widget.classList.add('state-idle');
+        delete widget.dataset.classId;
+        widget.style.cursor = '';
+        widget.title = '';
         widget.classList.remove('state-live');
         document.getElementById('live-class-title').innerText = "אין שיעור כרגע";
         document.getElementById('live-class-meta').style.display = 'none';
@@ -248,7 +254,9 @@ function saveScheduleFromEditor() {
     const rows = document.querySelectorAll('.schedule-edit-row');
     let updatedSchedule = [];
     rows.forEach(row => {
+        const oldCls = mySchedule.find(c => c.id === row.dataset.id) || {};
         updatedSchedule.push({
+            ...oldCls,
             id: row.dataset.id,
             course: row.querySelector('.edit-cls-name').value.trim(),
             type: row.querySelector('.edit-cls-type').value.trim(),
@@ -265,58 +273,427 @@ function saveScheduleFromEditor() {
     });
 }
 
+/* =====================================================================
+   פיצ'רים חדשים (גרסה 1.3):
+   1. ארכוב ("סיימתי") קורסים
+   2. פרטי שיעור: מרצה, נוכחות, נ"ז והרכב ציון סופי
+   3. מערכת שעות שבועית חדשה
+   ===================================================================== */
+
+const GRADE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#84cc16'];
+
+const ATTENDANCE_OPTIONS = {
+    '':          { cls: 'att-unknown',   label: 'לא הוגדר' },
+    'mandatory': { cls: 'att-mandatory', label: '❗ נוכחות חובה' },
+    'partial':   { cls: 'att-partial',   label: '⚠️ חובה חלקית' },
+    'optional':  { cls: 'att-optional',  label: '✅ נוכחות לא חובה' }
+};
+
+const TT_PX_PER_HOUR = 60;
+
+let archivedCourses = [];      // שמות מקוריים של קורסים שהסתיימו
+let courseDetails = {};        // { [שם קורס במערכת]: { credits, grading: [{id,name,weight,grade}] } }
+let detailsClassId = null;     // השיעור שפתוח כרגע בחלון הפרטים
+let gradingDraft = [];         // טיוטת הרכב הציון בזמן עריכה
+
+function escapeHtml(s) {
+    return String(s === undefined || s === null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function courseHsl(str, s, l) {
+    let hash = 0;
+    const safeStr = String(str || '');
+    for (let i = 0; i < safeStr.length; i++) hash = safeStr.charCodeAt(i) + ((hash << 5) - hash);
+    return `hsl(${Math.abs(hash) % 360}, ${s}%, ${l}%)`;
+}
+
+/* ---------------------------------------------------------------
+   1. ארכוב קורסים
+   --------------------------------------------------------------- */
+function isArchivedCourse(rawCourse) {
+    return archivedCourses.includes(String(rawCourse || 'ללא קורס'));
+}
+
+function archiveCourse(displayName) {
+    const raws = [...new Set(allTasks.map(t => String(t.course || 'ללא קורס')))]
+        .filter(r => getDisplayCourse(r) === displayName);
+    if (raws.length === 0) return;
+
+    const count = allTasks.filter(t => raws.includes(String(t.course || 'ללא קורס'))).length;
+    const ok = confirm(
+        `לסמן את הקורס "${displayName}" כקורס שהסתיים?\n\n` +
+        `• ${count} הגשות של הקורס יימחקו מהרשימה\n` +
+        `• הקורס לא יופיע שוב, וגם לא תקבל עליו התראות\n` +
+        `• אפשר לשחזר אותו בכל רגע דרך התפריט ☰ ← "קורסים שהסתיימו"`
+    );
+    if (!ok) return;
+
+    archivedCourses = [...new Set([...archivedCourses, ...raws])];
+    allTasks = allTasks.filter(t => !raws.includes(String(t.course || 'ללא קורס')));
+    activeCourseFilter = 'all';
+    chrome.storage.local.set({ archivedCoursesPref: archivedCourses, savedMoodleTasks: allTasks }, renderTasks);
+}
+
+function renderArchivedList() {
+    const list = document.getElementById('archived-list');
+    if (archivedCourses.length === 0) {
+        list.innerHTML = '<div style="text-align:center; color:var(--text-muted); padding:20px;">עדיין לא סימנת קורסים כמסתיימים.</div>';
+        return;
+    }
+    list.innerHTML = archivedCourses.map((raw, i) => `
+        <div class="restore-row">
+            <span>${escapeHtml(courseAliases[raw] || raw)}</span>
+            <button class="secondary restore-course-btn" data-index="${i}" style="padding:4px 10px; font-size:12px;">↩️ שחזר</button>
+        </div>
+    `).join('');
+    list.querySelectorAll('.restore-course-btn').forEach(btn => {
+        btn.addEventListener('click', () => restoreCourse(archivedCourses[parseInt(btn.dataset.index)]));
+    });
+}
+
+function restoreCourse(raw) {
+    archivedCourses = archivedCourses.filter(c => c !== raw);
+    chrome.storage.local.set({ archivedCoursesPref: archivedCourses }, () => {
+        renderArchivedList();
+        // סנכרון שקט (בלי התראות) כדי להחזיר את ההגשות של הקורס
+        if (lastIcsUrl) runIcsSync(lastIcsUrl, true, true);
+        else renderTasks();
+    });
+}
+
+/* ---------------------------------------------------------------
+   2. פרטי שיעור
+   --------------------------------------------------------------- */
+function openClassDetails(id) {
+    if (!mySchedule.find(c => c.id === id)) return;
+    detailsClassId = id;
+    renderClassDetails();
+    document.getElementById('class-details-modal').classList.add('active');
+}
+
+function renderClassDetails() {
+    const cls = mySchedule.find(c => c.id === detailsClassId);
+    if (!cls) return;
+
+    const displayCourse = courseAliases[cls.course] || cls.course || 'שיעור ללא שם';
+    const det = courseDetails[cls.course] || {};
+    const grading = Array.isArray(det.grading) ? det.grading : [];
+
+    document.getElementById('class-details-title').innerText = displayCourse;
+    document.getElementById('class-details-sub').innerText = cls.type || '';
+
+    const att = ATTENDANCE_OPTIONS[cls.attendance || ''] || ATTENDANCE_OPTIONS[''];
+    const dayLabel = `יום ${dayNames[parseInt(cls.day)] || '?'}'`;
+    const box = (label, value, isEmpty) =>
+        `<div class="detail-box"><div class="detail-label">${label}</div><div class="detail-value ${isEmpty ? 'empty' : ''}">${value}</div></div>`;
+
+    let html = '<div class="detail-grid">';
+    html += box('🕐 מתי', `${dayLabel} · ${escapeHtml(cls.start)} - ${escapeHtml(cls.end)}`, false);
+    html += box('📍 איפה', cls.loc ? escapeHtml(cls.loc) : 'לא הוזן', !cls.loc);
+    html += box('👨‍🏫 מרצה', cls.lecturer ? escapeHtml(cls.lecturer) : 'לא הוזן', !cls.lecturer);
+    html += `<div class="detail-box"><div class="detail-label">📋 נוכחות</div><div class="detail-value"><span class="att-badge ${att.cls}">${att.label}</span></div></div>`;
+    html += box('🎯 נקודות זכות', det.credits ? `${escapeHtml(det.credits)} נ״ז` : 'לא הוזן', !det.credits);
+    html += box('📝 הערות', cls.notes ? escapeHtml(cls.notes) : 'אין', !cls.notes);
+    html += '</div>';
+
+    // --- הרכב הציון הסופי ---
+    html += '<div><div class="section-title">📊 הרכב הציון הסופי</div>';
+    if (grading.length === 0) {
+        html += '<div class="detail-value empty">עוד לא הוזן הרכב ציון. לחץ על "עריכת פרטים" כדי להוסיף.</div>';
+    } else {
+        const totalW = grading.reduce((a, g) => a + (parseFloat(g.weight) || 0), 0);
+        const barBase = Math.max(totalW, 100);
+        html += '<div class="grade-bar">' + grading.map((g, i) => {
+            const w = parseFloat(g.weight) || 0;
+            return `<span style="width:${(w / barBase) * 100}%; background:${GRADE_COLORS[i % GRADE_COLORS.length]};" title="${escapeHtml(g.name)} – ${w}%"></span>`;
+        }).join('') + '</div>';
+
+        html += grading.map((g, i) => {
+            const hasGrade = g.grade !== '' && g.grade !== null && g.grade !== undefined && !isNaN(parseFloat(g.grade));
+            return `<div class="grade-row">
+                <span class="grade-dot" style="background:${GRADE_COLORS[i % GRADE_COLORS.length]};"></span>
+                <span class="grade-name">${escapeHtml(g.name) || 'ללא שם'}</span>
+                <span class="grade-weight">${parseFloat(g.weight) || 0}%</span>
+                <span class="grade-score">${hasGrade ? 'ציון: ' + escapeHtml(g.grade) : 'טרם הוזן ציון'}</span>
+            </div>`;
+        }).join('');
+
+        if (Math.abs(totalW - 100) > 0.01) {
+            html += `<div style="color:#d97706; font-size:12px; font-weight:600; margin-top:4px;">⚠️ סך המשקלים הוא ${totalW}% ולא 100%</div>`;
+        }
+
+        const graded = grading.filter(g => g.grade !== '' && g.grade !== null && g.grade !== undefined && !isNaN(parseFloat(g.grade)));
+        const gradedW = graded.reduce((a, g) => a + (parseFloat(g.weight) || 0), 0);
+        if (graded.length > 0 && gradedW > 0) {
+            const avg = graded.reduce((a, g) => a + (parseFloat(g.weight) || 0) * parseFloat(g.grade), 0) / gradedW;
+            html += `<div style="margin-top:8px; padding:10px 12px; border-radius:8px; background:rgba(59,130,246,0.1); color:var(--blue); font-size:13px; font-weight:700;">
+                ממוצע משוקלל על מה שהוזן: ${avg.toFixed(1)} <span style="font-weight:400;">(מבוסס על ${gradedW}% מהציון)</span></div>`;
+        }
+    }
+    html += '</div>';
+
+    document.getElementById('class-details-body').innerHTML = html;
+}
+
+function openClassEdit() {
+    const cls = mySchedule.find(c => c.id === detailsClassId);
+    if (!cls) return;
+    const displayCourse = courseAliases[cls.course] || cls.course || 'שיעור ללא שם';
+    const det = courseDetails[cls.course] || {};
+
+    document.getElementById('class-edit-title').innerText = `✏️ ${displayCourse}`;
+    document.getElementById('ce-session-label').innerText =
+        `${cls.type || 'מפגש'} · יום ${dayNames[parseInt(cls.day)] || '?'}' · ${cls.start}-${cls.end}`;
+
+    document.getElementById('ce-lecturer').value = cls.lecturer || '';
+    document.getElementById('ce-notes').value = cls.notes || '';
+    document.getElementById('ce-credits').value = det.credits || '';
+
+    const sel = document.getElementById('ce-attendance');
+    sel.innerHTML = Object.entries(ATTENDANCE_OPTIONS)
+        .map(([key, o]) => `<option value="${key}">${o.label}</option>`).join('');
+    sel.value = cls.attendance || '';
+
+    gradingDraft = (Array.isArray(det.grading) ? det.grading : []).map(g => ({ ...g }));
+    renderGradeEditRows();
+    document.getElementById('class-edit-modal').classList.add('active');
+}
+
+function syncGradingDraftFromDom() {
+    const rows = document.querySelectorAll('#ce-grading-list .grade-edit-row');
+    gradingDraft = Array.from(rows).map(row => ({
+        id: row.dataset.id,
+        name: row.querySelector('.ge-name').value,
+        weight: row.querySelector('.ge-weight').value,
+        grade: row.querySelector('.ge-grade').value
+    }));
+}
+
+function updateWeightSum() {
+    const total = gradingDraft.reduce((a, g) => a + (parseFloat(g.weight) || 0), 0);
+    const el = document.getElementById('ce-weight-sum');
+    if (gradingDraft.length === 0) { el.innerText = ''; return; }
+    const ok = Math.abs(total - 100) < 0.01;
+    el.innerText = ok ? `סך המשקלים: 100% ✓` : `סך המשקלים: ${total}% (צריך להיות 100%)`;
+    el.style.color = ok ? 'var(--success)' : '#d97706';
+}
+
+function renderGradeEditRows() {
+    const list = document.getElementById('ce-grading-list');
+    if (gradingDraft.length === 0) {
+        list.innerHTML = '<div style="color:var(--text-muted); font-size:13px; padding:6px 0;">עוד לא הוספת רכיבים. למשל: מבחן סופי 60%, עבודה 30%, תרגילים 10%.</div>';
+    } else {
+        list.innerHTML = gradingDraft.map(g => `
+            <div class="grade-edit-row" data-id="${escapeHtml(g.id)}">
+                <input type="text" class="ge-name" value="${escapeHtml(g.name)}" placeholder="למשל: מבחן סופי" style="flex:1;">
+                <input type="number" class="ge-weight" min="0" max="100" step="any" value="${escapeHtml(g.weight)}" placeholder="%" style="width:70px;">
+                <input type="number" class="ge-grade" min="0" max="100" step="any" value="${escapeHtml(g.grade)}" placeholder="ציון" style="width:70px;">
+                <button class="danger-btn ge-del" style="width:42px; padding:6px 0;" title="מחק רכיב">🗑️</button>
+            </div>
+        `).join('');
+        list.querySelectorAll('.grade-edit-row').forEach(row => {
+            row.querySelectorAll('input').forEach(inp => inp.addEventListener('input', () => { syncGradingDraftFromDom(); updateWeightSum(); }));
+            row.querySelector('.ge-del').addEventListener('click', () => {
+                syncGradingDraftFromDom();
+                gradingDraft = gradingDraft.filter(g => g.id !== row.dataset.id);
+                renderGradeEditRows();
+            });
+        });
+    }
+    updateWeightSum();
+}
+
+function saveClassEdit() {
+    const cls = mySchedule.find(c => c.id === detailsClassId);
+    if (!cls) return;
+    syncGradingDraftFromDom();
+
+    // פרטים של המפגש הספציפי
+    cls.lecturer = document.getElementById('ce-lecturer').value.trim();
+    cls.attendance = document.getElementById('ce-attendance').value;
+    cls.notes = document.getElementById('ce-notes').value.trim();
+
+    // פרטים של הקורס כולו
+    const cleanedGrading = gradingDraft
+        .filter(g => g.name.trim() || g.weight !== '')
+        .map(g => ({ id: g.id, name: g.name.trim(), weight: g.weight, grade: g.grade }));
+    courseDetails[cls.course] = {
+        credits: document.getElementById('ce-credits').value.trim(),
+        grading: cleanedGrading
+    };
+
+    chrome.storage.local.set({ mySchedulePref: mySchedule, courseDetailsPref: courseDetails }, () => {
+        document.getElementById('class-edit-modal').classList.remove('active');
+        renderClassDetails();
+        if (document.getElementById('weekly-schedule-modal').classList.contains('active')) renderVisualSchedule();
+        updateLiveSchedule();
+    });
+}
+
+/* ---------------------------------------------------------------
+   3. מערכת שעות שבועית
+   --------------------------------------------------------------- */
+// מחלק שיעורים חופפים לעמודות מקבילות כדי שלא יסתירו זה את זה
+function layoutLanes(classes) {
+    const sorted = [...classes].sort((a, b) =>
+        (timeToMins(a.start) - timeToMins(b.start)) || (timeToMins(a.end) - timeToMins(b.end)));
+    const result = [];
+    let cluster = [];
+    let clusterEnd = -1;
+
+    const flush = () => {
+        if (cluster.length === 0) return;
+        const laneEnds = [];
+        cluster.forEach(item => {
+            let lane = laneEnds.findIndex(end => end <= item.s);
+            if (lane === -1) { lane = laneEnds.length; laneEnds.push(item.e); }
+            else laneEnds[lane] = item.e;
+            item.lane = lane;
+        });
+        cluster.forEach(item => { item.lanes = laneEnds.length; result.push(item); });
+        cluster = [];
+    };
+
+    sorted.forEach(cls => {
+        const s = timeToMins(cls.start);
+        const e = Math.max(timeToMins(cls.end), s + 15);
+        if (cluster.length > 0 && s >= clusterEnd) { flush(); clusterEnd = -1; }
+        cluster.push({ cls, s, e });
+        clusterEnd = Math.max(clusterEnd, e);
+    });
+    flush();
+    return result;
+}
+
 function renderVisualSchedule() {
     const container = document.getElementById('weekly-timetable-container');
+    const scroller = document.getElementById('tt-scroll');
     container.innerHTML = '';
-    const days = ['א', 'ב', 'ג', 'ד', 'ה', 'ו'];
-    let minMin = 8 * 60; 
-    let maxMin = 21 * 60; 
-    
-    if (mySchedule && mySchedule.length > 0) {
-        const allStarts = mySchedule.map(c => timeToMins(c.start));
-        const allEnds = mySchedule.map(c => timeToMins(c.end));
-        minMin = Math.floor(Math.min(...allStarts) / 60) * 60; 
-        maxMin = Math.ceil(Math.max(...allEnds) / 60) * 60; 
+
+    if (!mySchedule || mySchedule.length === 0) {
+        container.innerHTML = '<div class="empty-state" style="width:100%; min-height:300px;"><span>🏫</span><div>עוד לא הוגדרה מערכת שעות.<br>פתח את התפריט ☰ ← "מערכת שעות" כדי להוסיף.</div></div>';
+        return;
     }
-    
-    maxMin += 60; 
+
+    container.style.setProperty('--hour-h', TT_PX_PER_HOUR + 'px');
+    const days = ['א', 'ב', 'ג', 'ד', 'ה', 'ו'];
+    const pxPerMin = TT_PX_PER_HOUR / 60;
+
+    const allStarts = mySchedule.map(c => timeToMins(c.start));
+    const allEnds = mySchedule.map(c => timeToMins(c.end));
+    let minMin = Math.floor(Math.min(...allStarts) / 60) * 60;
+    let maxMin = Math.ceil(Math.max(...allEnds) / 60) * 60;
+    if (maxMin - minMin < 4 * 60) maxMin = minMin + 4 * 60;
     const totalMins = maxMin - minMin;
+    const bodyHeight = (totalMins / 60) * TT_PX_PER_HOUR;
+
+    const now = new Date();
+    const todayIdx = now.getDay();
+    const nowMins = now.getHours() * 60 + now.getMinutes();
+    let scrollTarget = 0;
+
+    // עמודת השעות
+    const axis = document.createElement('div');
+    axis.className = 'tt-axis';
+    let labels = '';
+    for (let m = minMin, i = 0; m <= maxMin; m += 60, i++) {
+        const label = `${String(m / 60).padStart(2, '0')}:00`;
+        labels += `<div class="tt-hour-label" style="top:${(m - minMin) * pxPerMin}px; ${i === 0 ? 'transform:none;' : ''}">${label}</div>`;
+    }
+    axis.innerHTML = `<div class="tt-axis-header"></div><div class="tt-axis-body" style="height:${bodyHeight}px;">${labels}</div>`;
+    container.appendChild(axis);
 
     days.forEach((dayName, dayIndex) => {
         const dayCol = document.createElement('div');
-        dayCol.className = 'timetable-day';
+        dayCol.className = 'timetable-day' + (dayIndex === todayIdx ? ' today' : '');
+
         const header = document.createElement('div');
         header.className = 'timetable-day-header';
         header.innerText = `יום ${dayName}'`;
+
         const body = document.createElement('div');
         body.className = 'timetable-day-body';
-        
+        body.style.height = bodyHeight + 'px';
+
         const dayClasses = mySchedule.filter(c => parseInt(c.day) === dayIndex);
-        dayClasses.forEach(cls => {
-            const startM = timeToMins(cls.start);
-            const endM = timeToMins(cls.end);
-            const topPercent = ((startM - minMin) / totalMins) * 100;
-            const heightPercent = ((endM - startM) / totalMins) * 100;
+        layoutLanes(dayClasses).forEach(({ cls, s, e, lane, lanes }) => {
+            const displayCourse = courseAliases[cls.course] || cls.course || 'ללא שם';
+            const height = Math.max((e - s) * pxPerMin - 2, 18);
 
             const block = document.createElement('div');
             block.className = 'timetable-class-block';
-            block.style.top = `${topPercent}%`;
-            block.style.height = `calc(${heightPercent}% - 2px)`; 
-            
-            const displayCourse = courseAliases[cls.course] || cls.course;
-            block.innerHTML = `
-                <span class="timetable-class-title" title="${cls.course}">${displayCourse}</span>
-                <span class="timetable-class-time">${cls.start} - ${cls.end}</span>
-                <span class="timetable-class-time" style="margin-top:auto;">📍 ${cls.loc || 'ללא כיתה'}</span>
-            `;
+            block.style.top = `${(s - minMin) * pxPerMin}px`;
+            block.style.height = `${height}px`;
+            block.style.left = `calc(${lane} * 100% / ${lanes} + 2px)`;
+            block.style.width = `calc(100% / ${lanes} - 4px)`;
+            block.style.background = courseHsl(displayCourse, 70, 88);
+            block.style.borderRightColor = courseHsl(displayCourse, 60, 42);
+            block.title = `${displayCourse}${cls.type ? ' (' + cls.type + ')' : ''}\n${cls.start} - ${cls.end}${cls.loc ? '\n📍 ' + cls.loc : ''}\nלחץ לפרטים`;
+
+            let inner = '';
+            if (cls.attendance === 'mandatory') inner += '<span class="tt-badge" title="נוכחות חובה">❗</span>';
+            inner += `<span class="timetable-class-title">${escapeHtml(displayCourse)}</span>`;
+            if (cls.type && height >= 40) inner += `<span class="timetable-class-time">${escapeHtml(cls.type)}</span>`;
+            if (height >= 56) inner += `<span class="timetable-class-time">${escapeHtml(cls.start)} - ${escapeHtml(cls.end)}</span>`;
+            if (height >= 72 && cls.loc) inner += `<span class="timetable-class-time">📍 ${escapeHtml(cls.loc)}</span>`;
+            block.innerHTML = inner;
+
+            block.addEventListener('click', () => openClassDetails(cls.id));
             body.appendChild(block);
         });
-        
+
+        // קו "עכשיו" בעמודה של היום
+        if (dayIndex === todayIdx && nowMins >= minMin && nowMins <= maxMin) {
+            const line = document.createElement('div');
+            line.className = 'tt-now-line';
+            line.style.top = `${(nowMins - minMin) * pxPerMin}px`;
+            body.appendChild(line);
+            scrollTarget = Math.max(0, (nowMins - minMin) * pxPerMin - 120);
+        }
+
         dayCol.appendChild(header);
         dayCol.appendChild(body);
         container.appendChild(dayCol);
     });
+
+    setTimeout(() => { if (scroller) scroller.scrollTop = scrollTarget; }, 0);
 }
+
+/* ---------------------------------------------------------------
+   חיבור כל הכפתורים של הפיצ'רים החדשים
+   --------------------------------------------------------------- */
+function initNewFeatureHandlers() {
+    const $ = (id) => document.getElementById(id);
+
+    $('archived-courses-btn').addEventListener('click', () => {
+        toggleSideMenu(true);
+        renderArchivedList();
+        $('archived-modal').classList.add('active');
+    });
+    $('close-archived-modal').addEventListener('click', () => $('archived-modal').classList.remove('active'));
+
+    $('close-class-details').addEventListener('click', () => $('class-details-modal').classList.remove('active'));
+    $('close-class-details-btn').addEventListener('click', () => $('class-details-modal').classList.remove('active'));
+    $('edit-class-details-btn').addEventListener('click', openClassEdit);
+
+    $('cancel-class-edit-btn').addEventListener('click', () => $('class-edit-modal').classList.remove('active'));
+    $('save-class-edit-btn').addEventListener('click', saveClassEdit);
+    $('ce-add-component').addEventListener('click', () => {
+        syncGradingDraftFromDom();
+        gradingDraft.push({ id: 'g_' + Date.now(), name: '', weight: '', grade: '' });
+        renderGradeEditRows();
+    });
+
+    // לחיצה על השיעור הנוכחי בסרגל הצד פותחת את הפרטים שלו
+    $('live-schedule-widget').addEventListener('click', (e) => {
+        if (e.target.closest('#view-weekly-btn')) return;
+        const id = $('live-schedule-widget').dataset.classId;
+        if (id) openClassDetails(id);
+    });
+}
+
 
 function renderSidebar() {
     const courseList = document.getElementById('course-list');
@@ -348,12 +725,13 @@ function renderSidebar() {
                         <span style="width: 12px; height: 12px; border-radius: 50%; background: ${courseColor}; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.1); flex-shrink: 0;"></span>
                         <span class="course-name-text" style="padding-left: 0;">${dCourse}</span>
                     </div>
-                    <span class="course-count" style="background: ${courseColor};">${tasksInCourse}</span>
+                    <span class="course-actions"><button class="course-archive-btn" data-course="${safeCourse}" title="סיימתי את הקורס - הסר אותו">✓ סיימתי</button><span class="course-count" style="background: ${courseColor};">${tasksInCourse}</span></span>
                 </li>
             `;
         }
     });
     courseList.innerHTML = html;
+    courseList.querySelectorAll('.course-archive-btn').forEach(btn => btn.addEventListener('click', (e) => { e.stopPropagation(); archiveCourse(btn.dataset.course); }));
     
     document.querySelectorAll('.course-item').forEach(item => {
         item.addEventListener('click', function() {
@@ -587,7 +965,7 @@ function fireNotification(title, message) {
     });
 }
 
-async function runIcsSync(url, isSilent = false) {
+async function runIcsSync(url, isSilent = false, suppressNotifs = false) {
     updateSyncStatusUI('בודק עדכונים במודל... ⏳', 'syncing');
     try {
         const response = await fetch(url);
@@ -618,6 +996,7 @@ async function runIcsSync(url, isSilent = false) {
                 title = parts.slice(1).join(':').trim(); 
             }
             if (!course) course = 'ללא קורס';
+            if (archivedCourses.includes(course)) return; // קורס שהסתיים - מתעלמים לגמרי
 
             let dateStr = 'ללא תאריך יעד';
             if (ev.DTEND || ev.DTSTART) {
@@ -663,10 +1042,10 @@ async function runIcsSync(url, isSilent = false) {
                 }
             } else {
                 allTasks.push({ id: safeId, title: cleanTitle, course: course, dateStr: dateStr, url: taskUrl, isDone: false, subTasks: [] });
-                newLogs.push({ type: 'new', text: `[${displayCourseName}] התווספה הגשה חדשה: ${cleanTitle}` });
+                if (!suppressNotifs) newLogs.push({ type: 'new', text: `[${displayCourseName}] התווספה הגשה חדשה: ${cleanTitle}` });
                 addedCount++;
                 
-                if (notifSettings.enabled && notifSettings.onNew && notifSettings.courses[course] !== false) {
+                if (!suppressNotifs && notifSettings.enabled && notifSettings.onNew && notifSettings.courses[course] !== false) {
                     fireNotification(`[${displayCourseName}]`, `נוספה הגשה חדשה בקורס ${displayCourseName}\nשם ההגשה: ${cleanTitle}`);
                 }
             }
@@ -717,7 +1096,7 @@ async function runIcsSync(url, isSilent = false) {
 
 function renderNotifCourses() {
     const list = document.getElementById('notif-courses-list');
-    const uniqueCourses = [...new Set(allTasks.map(t => String(t.course || 'ללא קורס')))].sort();
+    const uniqueCourses = [...new Set(allTasks.map(t => String(t.course || 'ללא קורס')))].filter(c => !archivedCourses.includes(c)).sort();
 
     if (uniqueCourses.length === 0) {
         list.innerHTML = '<div style="color:var(--text-muted); font-size:13px; text-align:center;">אין קורסים במערכת עדיין. סנכרן קודם.</div>';
@@ -738,8 +1117,9 @@ function renderNotifCourses() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    initNewFeatureHandlers();
     
-    chrome.storage.local.get(['savedMoodleTasks', 'showCompletedPref', 'sortPref', 'courseAliasesPref', 'lastIcsUrlPref', 'lastSyncMsgPref', 'darkModePref', 'mySchedulePref', 'showSchedulePref', 'recentUpdatesPref', 'notifSettingsPref'], (result) => {
+    chrome.storage.local.get(['savedMoodleTasks', 'showCompletedPref', 'sortPref', 'courseAliasesPref', 'lastIcsUrlPref', 'lastSyncMsgPref', 'darkModePref', 'mySchedulePref', 'showSchedulePref', 'recentUpdatesPref', 'notifSettingsPref', 'archivedCoursesPref', 'courseDetailsPref'], (result) => {
         if (result.darkModePref) { document.body.classList.add('dark-mode'); document.getElementById('dark-mode-toggle').checked = true; }
         if (result.savedMoodleTasks) allTasks = result.savedMoodleTasks.map(t => ({ ...t, subTasks: t.subTasks || [] }));
         if (result.mySchedulePref) mySchedule = result.mySchedulePref;
@@ -749,6 +1129,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (result.sortPref !== undefined) document.getElementById('sort-select').value = result.sortPref;
         if (result.courseAliasesPref !== undefined) courseAliases = result.courseAliasesPref;
         if (result.lastIcsUrlPref) lastIcsUrl = result.lastIcsUrlPref;
+        if (result.archivedCoursesPref) archivedCourses = result.archivedCoursesPref;
+        if (result.courseDetailsPref) courseDetails = result.courseDetailsPref;
+        // ניקוי: הגשות של קורסים שהסתיימו (למשל אם נכנסו מהרקע) לא יוצגו
+        const tasksBeforePrune = allTasks.length;
+        allTasks = allTasks.filter(t => !isArchivedCourse(t.course));
+        if (allTasks.length !== tasksBeforePrune) chrome.storage.local.set({ savedMoodleTasks: allTasks });
         
         if (result.showSchedulePref !== undefined) showSchedule = result.showSchedulePref;
         document.getElementById('show-schedule-toggle').checked = showSchedule;
@@ -865,7 +1251,7 @@ document.addEventListener('DOMContentLoaded', () => {
         toggleSideMenu(true);
         const modal = document.getElementById('settings-modal');
         const listContainer = document.getElementById('settings-aliases-list');
-        const originalCourses = [...new Set(allTasks.map(t => String(t.course || 'ללא קורס')))].sort();
+        const originalCourses = [...new Set(allTasks.map(t => String(t.course || 'ללא קורס')))].filter(c => !archivedCourses.includes(c)).sort();
         
         if (originalCourses.length === 0) listContainer.innerHTML = '<div style="padding:20px; text-align:center; color:var(--text-muted);">אין עדיין קורסים במערכת.</div>';
         else {
