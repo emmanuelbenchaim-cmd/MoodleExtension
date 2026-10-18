@@ -289,7 +289,7 @@ const ATTENDANCE_OPTIONS = {
     'optional':  { cls: 'att-optional',  label: '✅ נוכחות לא חובה' }
 };
 
-const TT_PX_PER_HOUR = 60;
+let TT_PX_PER_HOUR = 64;
 
 let archivedCourses = [];      // שמות מקוריים של קורסים שהסתיימו
 let courseDetails = {};        // { [שם קורס במערכת]: { credits, grading: [{id,name,weight,grade}] } }
@@ -567,6 +567,24 @@ function layoutLanes(classes) {
     return result;
 }
 
+// מכווץ את הכתב בכל בלוק עד שהתוכן נכנס; אם עדיין לא נכנס - מסיר שורות משניות (סוג/שעה/חדר)
+function fitTimetableBlocks(container) {
+    const startSize = document.body.classList.contains('full-mode') ? 13 : 11.5;
+    container.querySelectorAll('.timetable-class-block').forEach(block => {
+        let size = startSize;
+        block.style.fontSize = size + 'px';
+        const overflows = () => block.scrollHeight > block.clientHeight + 1 || block.scrollWidth > block.clientWidth + 1;
+        while (overflows() && size > 7) { size -= 0.5; block.style.fontSize = size + 'px'; }
+        const extras = Array.from(block.querySelectorAll('.timetable-class-time'));
+        while (overflows() && extras.length) extras.pop().remove();
+    });
+}
+
+function openFullView(openWeekly) {
+    const url = chrome.runtime.getURL('popup.html') + '?full=1' + (openWeekly ? '&open=weekly' : '');
+    chrome.tabs.create({ url });
+}
+
 function renderVisualSchedule() {
     const container = document.getElementById('weekly-timetable-container');
     const scroller = document.getElementById('tt-scroll');
@@ -658,7 +676,7 @@ function renderVisualSchedule() {
         container.appendChild(dayCol);
     });
 
-    setTimeout(() => { if (scroller) scroller.scrollTop = scrollTarget; }, 0);
+    setTimeout(() => { fitTimetableBlocks(container); if (scroller) scroller.scrollTop = scrollTarget; }, 0);
 }
 
 /* ---------------------------------------------------------------
@@ -666,6 +684,23 @@ function renderVisualSchedule() {
    --------------------------------------------------------------- */
 function initNewFeatureHandlers() {
     const $ = (id) => document.getElementById(id);
+
+    const params = new URLSearchParams(location.search);
+    if (params.get('full') === '1') {
+        document.documentElement.classList.add('full-mode');
+        document.body.classList.add('full-mode');
+        TT_PX_PER_HOUR = 84;
+        if (params.get('open') === 'weekly') {
+            let tries = 0;
+            const iv = setInterval(() => {
+                tries++;
+                if (mySchedule.length > 0 || tries > 20) { clearInterval(iv); $('view-weekly-btn').click(); }
+            }, 150);
+        }
+    }
+    $('open-full-btn').addEventListener('click', () => openFullView(false));
+    $('open-full-menu-btn').addEventListener('click', () => openFullView(false));
+    $('weekly-open-full').addEventListener('click', () => openFullView(true));
 
     $('archived-courses-btn').addEventListener('click', () => {
         toggleSideMenu(true);
